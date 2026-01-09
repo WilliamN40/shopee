@@ -3,72 +3,109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shopee Label Multiplier</title>
+    <title>Shopee Label Master Tool</title>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f4f4f4; }
-        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 350px; }
-        h1 { color: #ee4d2d; margin-bottom: 10px; }
-        p { color: #666; font-size: 0.9rem; margin-bottom: 25px; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background-color: #f4f4f4; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 400px; }
+        h1 { color: #ee4d2d; margin: 0 0 5px 0; text-align: center; }
+        p.subtitle { color: #666; font-size: 0.9rem; text-align: center; margin-bottom: 20px; }
+        
+        /* Form Elements */
+        .control-group { margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+        label { font-weight: 600; font-size: 0.9rem; display: block; margin-bottom: 5px; color: #333; }
+        
+        select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 10px; font-size: 0.95rem; }
+        
+        .checkbox-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        .checkbox-row label { margin: 0; font-weight: normal; font-size: 0.9rem; cursor: pointer; }
+        .checkbox-row input { transform: scale(1.2); cursor: pointer; }
+
         input[type="file"] { display: none; }
-        .custom-file-upload { border: 2px dashed #ee4d2d; border-radius: 8px; padding: 20px; display: block; cursor: pointer; color: #ee4d2d; font-weight: bold; margin-bottom: 20px; transition: 0.3s; }
-        .custom-file-upload:hover { background: #fff5f2; }
-        button { background-color: #ee4d2d; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; font-size: 1rem; }
-        button:disabled { background-color: #ccc; cursor: not-ok; }
-        #status { margin-top: 20px; font-size: 0.85rem; color: #333; white-space: pre-wrap; text-align: left; background: #eee; padding: 10px; border-radius: 4px; display: none; }
+        .file-upload-btn { border: 2px dashed #ee4d2d; border-radius: 8px; padding: 15px; text-align: center; cursor: pointer; color: #ee4d2d; font-weight: bold; transition: 0.2s; display: block; margin-top: 10px; }
+        .file-upload-btn:hover { background: #fff5f2; }
+        
+        button#processBtn { background-color: #ee4d2d; color: white; border: none; padding: 12px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; font-size: 1rem; margin-top: 20px; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        
+        #status { margin-top: 15px; font-size: 0.85rem; color: #444; background: #f0f0f0; padding: 10px; border-radius: 4px; max-height: 150px; overflow-y: auto; display: none; white-space: pre-wrap; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h1>Shopee Tool</h1>
-    <p>Auto-detect Qty & Duplicate Pages</p>
+    <h1>Shopee Master Tool</h1>
+    <p class="subtitle">Sorter, Multiplier & Labeler</p>
     
-    <label for="fileInput" class="custom-file-upload" id="fileLabel">
-        Click to Upload PDF
+    <div class="control-group">
+        <label>Sorting Mode:</label>
+        <select id="sortMode">
+            <option value="variant">Group by Variant (M32, L28, XL...)</option>
+            <option value="page">Group by Order Number</option>
+        </select>
+
+        <div class="checkbox-row">
+            <label for="showVariant">Show Variant Name (Bottom-Left)</label>
+            <input type="checkbox" id="showVariant" checked>
+        </div>
+        <div class="checkbox-row">
+            <label for="showCounter">Show Counter x/N (Bottom-Right)</label>
+            <input type="checkbox" id="showCounter" checked>
+        </div>
+    </div>
+
+    <label for="fileInput" class="file-upload-btn" id="fileLabel">
+        📂 Click to Upload PDF
     </label>
     <input type="file" id="fileInput" accept=".pdf">
     
-    <button id="processBtn">GENERATE LABELS</button>
+    <button id="processBtn">PROCESS LABELS</button>
     <div id="status"></div>
 </div>
 
 <script type="module">
-    // Import modern PDF.js
     import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.149/pdf.min.mjs';
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.149/pdf.worker.min.mjs';
 
     const { PDFDocument, rgb, StandardFonts } = PDFLib;
-    const btn = document.getElementById('processBtn');
-    const statusDiv = document.getElementById('status');
+
     const fileInput = document.getElementById('fileInput');
     const fileLabel = document.getElementById('fileLabel');
+    const processBtn = document.getElementById('processBtn');
+    const statusDiv = document.getElementById('status');
+    
+    // UI Inputs
+    const sortModeSelect = document.getElementById('sortMode');
+    const showVariantCheck = document.getElementById('showVariant');
+    const showCounterCheck = document.getElementById('showCounter');
 
-    fileInput.onchange = () => { if(fileInput.files[0]) fileLabel.innerText = fileInput.files[0].name; };
+    fileInput.onchange = () => { if(fileInput.files[0]) fileLabel.innerText = "📄 " + fileInput.files[0].name; };
 
-    btn.onclick = async () => {
-        if (!fileInput.files[0]) return alert("Select PDF first");
+    processBtn.onclick = async () => {
+        if (!fileInput.files[0]) return alert("Please select a PDF file first.");
         
-        btn.disabled = true;
+        processBtn.disabled = true;
         statusDiv.style.display = "block";
         statusDiv.innerText = "Starting analysis...";
 
         try {
             const arrayBuffer = await fileInput.files[0].arrayBuffer();
-            // Use slice to avoid detaching buffers
+            
+            // Load Documents
             const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
             const pdfData = await loadingTask.promise;
-            
             const sourceDoc = await PDFDocument.load(arrayBuffer.slice(0));
             const outDoc = await PDFDocument.create();
-            // Embed font for drawing the variation name
             const font = await outDoc.embedFont(StandardFonts.HelveticaBold);
 
-            let categorizedPages = {}; 
+            // --- STEP 1: EXTRACT ALL INDIVIDUAL ITEMS ---
+            // We will flatten the PDF into a list of "Label Objects"
+            // Each object represents ONE physical sticker to be printed.
+            let allLabels = [];
 
-            // --- PHASE 1: ANALYZE & GROUP ---
             for (let i = 1; i <= pdfData.numPages; i++) {
-                statusDiv.innerText = `Analyzing: Page ${i} of ${pdfData.numPages}`;
+                statusDiv.innerText = `Scanning Page ${i} of ${pdfData.numPages}...`;
+                
                 const pageData = await pdfData.getPage(i);
                 const textContent = await pageData.getTextContent();
                 
@@ -76,96 +113,151 @@
                 const variasiHeader = textContent.items.find(item => item.str.trim() === "Variasi");
                 const pesanMarker = textContent.items.find(item => item.str.includes("Pesan:"));
                 
-                if (qtyHeader && variasiHeader && pesanMarker) {
+                let pageItems = [];
+
+                if (qtyHeader && pesanMarker) {
+                    // Coordinates
                     const tableTopY = qtyHeader.transform[5];
                     const tableBottomY = pesanMarker.transform[5];
                     const qtyX = qtyHeader.transform[4];
-                    const variasiX = variasiHeader.transform[4];
+                    const variasiX = variasiHeader ? variasiHeader.transform[4] : 0;
 
-                    const allQtyItems = textContent.items.filter(item => 
+                    // 1. Get all Quantities in this table
+                    const validQtyItems = textContent.items.filter(item => 
                         Math.abs(item.transform[4] - qtyX) < 15 && 
                         item.transform[5] < tableTopY && item.transform[5] > tableBottomY &&
                         /^\d+$/.test(item.str.trim())
                     );
 
-                    const allVariasiItems = textContent.items.filter(item => 
+                    // 2. Get all Variations (if header exists)
+                    const validVarItems = variasiHeader ? textContent.items.filter(item => 
                         Math.abs(item.transform[4] - variasiX) < 30 && 
                         item.transform[5] < tableTopY && item.transform[5] > tableBottomY &&
                         item.str.trim() !== ""
-                    );
+                    ) : [];
 
-                    // Match Qty to Variasi based on vertical Y position
-                    allQtyItems.forEach(qItem => {
-                        const qY = qItem.transform[5];
+                    // 3. Match them row-by-row
+                    validQtyItems.forEach(qItem => {
                         const qVal = parseInt(qItem.str.trim());
-                        // Find variation on the same line (within 10pt tolerance)
-                        const vItem = allVariasiItems.find(v => Math.abs(v.transform[5] - qY) < 10);
-                        // Clean up variation name (remove extra spaces)
-                        const vName = vItem ? vItem.str.replace(/\s+/g, ' ').trim() : "No Variant";
+                        const qY = qItem.transform[5];
 
-                        if (!categorizedPages[vName]) categorizedPages[vName] = [];
-                        categorizedPages[vName].push({ pageIndex: i - 1, qty: qVal });
+                        // Find variation on same Y line
+                        let vName = "Standard";
+                        if (variasiHeader) {
+                            const vItem = validVarItems.find(v => Math.abs(v.transform[5] - qY) < 10);
+                            if (vItem) vName = vItem.str.replace(/\s+/g, ' ').trim();
+                        }
+
+                        // Add to temp page list
+                        // If Qty is 2, we add 2 identical items
+                        for(let k=0; k < qVal; k++) {
+                            pageItems.push({
+                                pageIndex: i - 1,
+                                variant: vName,
+                                // We will set counter later
+                            });
+                        }
                     });
+                } 
+                
+                // Fallback: If logic fails or page has no table (e.g. 1 item), treat as 1 item
+                if (pageItems.length === 0) {
+                    pageItems.push({ pageIndex: i - 1, variant: "Unknown" });
                 }
+
+                // Assign "Counter" (x/N) for this specific order/page
+                // N is total items in THIS order
+                const totalOrderQty = pageItems.length;
+                pageItems.forEach((item, index) => {
+                    item.counterStr = `${index + 1}/${totalOrderQty}`;
+                    item.originalOrder = i; // Keep track of original page order
+                    allLabels.push(item);
+                });
             }
 
-            // --- PHASE 2: GENERATE & MARK PDF ---
-            statusDiv.innerText = "Generating sorted PDF and adding marks...";
-            const sortedVariations = Object.keys(categorizedPages).sort();
+            // --- STEP 2: SORT BASED ON USER CHOICE ---
+            statusDiv.innerText = "Sorting labels...";
+            const mode = sortModeSelect.value;
+
+            if (mode === 'variant') {
+                // Sort primarily by Variant Name, secondary by Original Page Order
+                allLabels.sort((a, b) => {
+                    if (a.variant < b.variant) return -1;
+                    if (a.variant > b.variant) return 1;
+                    return a.originalOrder - b.originalOrder;
+                });
+            } else {
+                // Keep Original Order (just ensure they stay in page sequence)
+                // They are already pushed in page order, so we do nothing.
+            }
+
+            // --- STEP 3: GENERATE PDF WITH TEXT ---
+            statusDiv.innerText = "Generating PDF...";
             
-            for (const variant of sortedVariations) {
-                for (const item of categorizedPages[variant]) {
-                    // Copy the original page
-                    const [copiedPage] = await outDoc.copyPages(sourceDoc, [item.pageIndex]);
-                    const { width } = copiedPage.getSize();
+            const doShowVar = showVariantCheck.checked;
+            const doShowCount = showCounterCheck.checked;
 
-                    // --- DRAW VARIATION ON BOTTOM RIGHT ---
-                    const fontSize = 12;
-                    // Calculate width of text to align it to the right
-                    const textWidth = font.widthOfTextAtSize(variant, fontSize);
-                    const marginX = 25; // Distance from right edge
-                    const marginY = 25; // Distance from bottom edge
+            for (const label of allLabels) {
+                const [copiedPage] = await outDoc.copyPages(sourceDoc, [label.pageIndex]);
+                const { width } = copiedPage.getSize();
+                const fontSize = 11;
 
-                    // Draw white background box for readability
+                // --- A. Draw Variant Name (Bottom Left) ---
+                if (doShowVar) {
+                    const text = label.variant;
+                    const textWidth = font.widthOfTextAtSize(text, fontSize);
+                    
+                    // Box
                     copiedPage.drawRectangle({
-                        x: width - textWidth - marginX - 5,
-                        y: marginY - 5,
-                        width: textWidth + 10,
-                        height: fontSize + 8,
-                        color: rgb(1, 1, 1),
+                        x: 8, y: 18, width: textWidth + 10, height: 16,
+                        color: rgb(1, 1, 1)
                     });
-
-                    // Draw the variation text
-                    copiedPage.drawText(variant, {
-                        x: width - textWidth - marginX,
-                        y: marginY,
-                        size: fontSize,
-                        font: font,
-                        color: rgb(0, 0, 0),
+                    // Text
+                    copiedPage.drawText(text, {
+                        x: 13, y: 22, size: fontSize, font: font, color: rgb(0, 0, 0)
                     });
-                    // --------------------------------------
-
-                    // Add the marked page Qty times
-                    for (let k = 0; k < item.qty; k++) {
-                        outDoc.addPage(copiedPage);
-                    }
                 }
+
+                // --- B. Draw Counter (Bottom Right) ---
+                if (doShowCount) {
+                    const text = label.counterStr; // e.g., "1/4"
+                    const textWidth = font.widthOfTextAtSize(text, fontSize);
+                    const rightMargin = 15;
+
+                    // Box
+                    copiedPage.drawRectangle({
+                        x: width - rightMargin - textWidth - 5, y: 18,
+                        width: textWidth + 10, height: 16,
+                        color: rgb(1, 1, 1)
+                    });
+                    // Text
+                    copiedPage.drawText(text, {
+                        x: width - rightMargin - textWidth, y: 22,
+                        size: fontSize, font: font, color: rgb(0, 0, 0)
+                    });
+                }
+
+                outDoc.addPage(copiedPage);
             }
 
+            // Save
             const pdfBytes = await outDoc.save();
+            const blob = new Blob([pdfBytes], { type: "application/pdf" });
             const link = document.createElement('a');
-            link.href = URL.createObjectURL(new Blob([pdfBytes], { type: "application/pdf" }));
-            link.download = `Sorted_Labels_${fileInput.files[0].name}`;
+            link.href = URL.createObjectURL(blob);
+            
+            const prefix = mode === 'variant' ? "SORTED_" : "ORIGINAL_";
+            link.download = `${prefix}${fileInput.files[0].name}`;
             link.click();
             
-            statusDiv.innerText = `Success!\nSorted groups:\n${sortedVariations.join("\n")}`;
+            statusDiv.innerText = `Success!\nGenerated ${allLabels.length} total labels.`;
             await loadingTask.destroy();
 
         } catch (err) {
-            statusDiv.innerText = "Error: " + err.message;
             console.error(err);
+            statusDiv.innerText = "Error: " + err.message;
         } finally {
-            btn.disabled = false;
+            processBtn.disabled = false;
         }
     };
 </script>
