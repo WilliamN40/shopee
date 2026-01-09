@@ -47,12 +47,11 @@
         if(fileInput.files[0]) fileLabel.innerText = fileInput.files[0].name;
     };
 
-    btn.onclick = async () => {
+btn.onclick = async () => {
         if (!fileInput.files[0]) return alert("Select a PDF first!");
-        
         btn.disabled = true;
         statusDiv.style.display = "block";
-        statusDiv.innerText = "Initializing...";
+        statusDiv.innerText = "Reading coordinates...";
 
         try {
             const file = fileInput.files[0];
@@ -62,36 +61,32 @@
 
             const loadingTask = pdfjsLib.getDocument({data: bufferForPdfJS});
             const pdfData = await loadingTask.promise;
-            const numPages = pdfData.numPages;
             
             const sourceDoc = await PDFDocument.load(bufferForPdfLib);
             const outDoc = await PDFDocument.create();
 
-            let totalLabelsGenerated = 0;
-
-            for (let i = 1; i <= numPages; i++) {
-                // Short summary update instead of a long list
-                statusDiv.innerText = `Processing: Page ${i} of ${numPages}...`;
-
+            for (let i = 1; i <= pdfData.numPages; i++) {
                 const pageData = await pdfData.getPage(i);
                 const textContent = await pageData.getTextContent();
                 
-                // 1. Find the horizontal position of "Qty"
+                // Find the horizontal position (X) of the word "Qty"
                 const qtyHeader = textContent.items.find(item => item.str.trim() === "Qty");
                 const pesanMarker = textContent.items.find(item => item.str.includes("Pesan:"));
                 
                 let totalQty = 0;
 
                 if (qtyHeader && pesanMarker) {
-                    const qtyX = qtyHeader.transform[4];
-                    const tableTopY = qtyHeader.transform[5];
-                    const tableBottomY = pesanMarker.transform[5];
+                    const qtyX = qtyHeader.transform[4]; // Horizontal coordinate
+                    const tableTopY = qtyHeader.transform[5]; // Top boundary
+                    const tableBottomY = pesanMarker.transform[5]; // Bottom boundary
 
-                    // 2. Only grab numbers aligned vertically with the "Qty" column
+                    // Filter items that are:
+                    // 1. Aligned horizontally with "Qty" (with a little margin)
+                    // 2. Vertically between the header and the footer
                     const qtyValues = textContent.items.filter(item => {
                         const itemX = item.transform[4];
                         const itemY = item.transform[5];
-                        const isAligned = Math.abs(itemX - qtyX) < 20; 
+                        const isAligned = Math.abs(itemX - qtyX) < 20; // 20pt margin
                         const isInsideTable = itemY < tableTopY && itemY > tableBottomY;
                         const isNumber = /^\d+$/.test(item.str.trim());
                         return isAligned && isInsideTable && isNumber;
@@ -102,30 +97,26 @@
                     });
                 }
 
-                if (totalQty === 0) totalQty = 1;
-                totalLabelsGenerated += totalQty;
+                if (totalQty === 0) totalQty = 1; // Fallback
 
-                // 3. Duplicate pages
+                statusDiv.innerText += `\nPage ${i}: Found Qty ${totalQty}`;
+
                 const [copiedPage] = await outDoc.copyPages(sourceDoc, [i - 1]);
                 for (let k = 0; k < totalQty; k++) {
                     outDoc.addPage(copiedPage);
                 }
             }
 
-            statusDiv.innerText = "Saving PDF...";
             const pdfBytes = await outDoc.save();
             const blob = new Blob([pdfBytes], { type: "application/pdf" });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             link.download = `Multiplied_${file.name}`;
             link.click();
-            
-            // Final short summary
-            statusDiv.innerText = `Success!\nProcessed ${numPages} labels.\nGenerated ${totalLabelsGenerated} total pages for printing.`;
+            statusDiv.innerText += "\n\nSuccess!";
             loadingTask.destroy();
 
         } catch (err) {
-            console.error(err);
             statusDiv.innerText = "Error: " + err.message;
         } finally {
             btn.disabled = false;
