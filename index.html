@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopee Label Multiplier</title>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f4f4f4; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 350px; }
+        h1 { color: #ee4d2d; margin-bottom: 10px; }
+        p { color: #666; font-size: 0.9rem; margin-bottom: 25px; }
+        input[type="file"] { display: none; }
+        .custom-file-upload { border: 2px dashed #ee4d2d; border-radius: 8px; padding: 20px; display: block; cursor: pointer; color: #ee4d2d; font-weight: bold; margin-bottom: 20px; transition: 0.3s; }
+        .custom-file-upload:hover { background: #fff5f2; }
+        button { background-color: #ee4d2d; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; font-size: 1rem; }
+        button:disabled { background-color: #ccc; cursor: not-ok; }
+        #status { margin-top: 20px; font-size: 0.85rem; color: #333; white-space: pre-wrap; text-align: left; background: #eee; padding: 10px; border-radius: 4px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>Shopee Tool</h1>
+    <p>Auto-detect Qty & Duplicate Pages</p>
+    
+    <label for="fileInput" class="custom-file-upload" id="fileLabel">
+        Click to Upload PDF
+    </label>
+    <input type="file" id="fileInput" accept=".pdf">
+    
+    <button id="processBtn">GENERATE LABELS</button>
+    <div id="status"></div>
+</div>
+
+<script>
+    const { PDFDocument, rgb, StandardFonts } = PDFLib;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+    const fileInput = document.getElementById('fileInput');
+    const fileLabel = document.getElementById('fileLabel');
+    const statusDiv = document.getElementById('status');
+    const btn = document.getElementById('processBtn');
+
+    fileInput.onchange = () => {
+        if(fileInput.files[0]) fileLabel.innerText = fileInput.files[0].name;
+    };
+
+    btn.onclick = async () => {
+        if (!fileInput.files[0]) return alert("Select a PDF first!");
+        
+        btn.disabled = true;
+        statusDiv.style.display = "block";
+        statusDiv.innerText = "Reading PDF...";
+
+        try {
+            const file = fileInput.files[0];
+            const arrayBuffer = await file.arrayBuffer();
+            
+            // Create a slice (copy) of the buffer so pdf-lib doesn't see a "detached" one
+            const bufferForPdfLib = arrayBuffer.slice(0); 
+            const bufferForPdfJS = arrayBuffer.slice(0);
+
+            // 1. USE PDF.JS TO READ TEXT
+            const loadingTask = pdfjsLib.getDocument({data: bufferForPdfJS});
+            const pdfData = await loadingTask.promise;
+            const numPages = pdfData.numPages;
+            
+            // 2. USE PDF-LIB TO WRITE PDF
+            const sourceDoc = await PDFDocument.load(bufferForPdfLib);
+            const outDoc = await PDFDocument.create();
+            const font = await outDoc.embedFont(StandardFonts.HelveticaBold);
+
+            for (let i = 1; i <= numPages; i++) {
+                const pageData = await pdfData.getPage(i);
+                const textContent = await pageData.getTextContent();
+                
+                // Extract strings from the page
+                const strings = textContent.items.map(item => item.str.trim()).filter(s => s !== "");
+
+                // Logic to find Qty
+                const qtyIdx = strings.indexOf("Qty");
+                const pesanIdx = strings.findIndex(s => s.includes("Pesan:"));
+                
+                let totalQty = 1;
+                if (qtyIdx !== -1 && pesanIdx !== -1) {
+                    const tableItems = strings.slice(qtyIdx + 1, pesanIdx);
+                    let sum = 0;
+                    // Every 6th item starting from index 5 is the Quantity
+                    for (let j = 5; j < tableItems.length; j += 6) {
+                        const val = parseInt(tableItems[j]);
+                        if (!isNaN(val)) sum += val;
+                    }
+                    totalQty = sum || 1;
+                }
+
+                statusDiv.innerText += `\nPage ${i}: Found Qty ${totalQty}`;
+
+                // Duplicate the page
+                for (let k = 0; k < totalQty; k++) {
+                    const [copiedPage] = await outDoc.copyPages(sourceDoc, [i - 1]);
+                    outDoc.addPage(copiedPage);
+                }
+            }
+
+            const pdfBytes = await outDoc.save();
+            const blob = new Blob([pdfBytes], { type: "application/pdf" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `Multiplied_${file.name}`;
+            link.click();
+            statusDiv.innerText += "\n\nSuccess! Downloading...";
+
+        } catch (err) {
+            console.error(err);
+            statusDiv.innerText = "Error: " + err.message;
+        } finally {
+            btn.disabled = false;
+        }
+    };
+</script>
+</body>
+</html>
