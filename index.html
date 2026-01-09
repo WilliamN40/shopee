@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Shopee Label Multiplier</title>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f4f4f4; }
         .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 350px; }
@@ -34,9 +33,13 @@
     <div id="status"></div>
 </div>
 
-<script>
+<script type="module">
+    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.149/pdf.min.mjs';
+    
+    // 3. Updated Worker source to match v5
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.149/pdf.worker.min.mjs';
+
     const { PDFDocument, rgb, StandardFonts } = PDFLib;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
     const fileInput = document.getElementById('fileInput');
     const fileLabel = document.getElementById('fileLabel');
@@ -70,7 +73,6 @@
             let totalLabelsGenerated = 0;
 
             for (let i = 1; i <= numPages; i++) {
-                // Short summary update instead of a long list
                 statusDiv.innerText = `Processing: Page ${i} of ${numPages}...`;
 
                 const pageData = await pdfData.getPage(i);
@@ -86,7 +88,7 @@
                     const qtyX = qtyHeader.transform[4];
                     const tableTopY = qtyHeader.transform[5];
                     const tableBottomY = pesanMarker.transform[5];
-
+      
                     // 2. Only grab numbers aligned vertically with the "Qty" column
                     const qtyValues = textContent.items.filter(item => {
                         const itemX = item.transform[4];
@@ -120,8 +122,7 @@
             link.download = `Multiplied_${file.name}`;
             link.click();
             
-            // Final short summary
-            statusDiv.innerText = `Success!\nProcessed ${numPages} labels.\nGenerated ${totalLabelsGenerated} total pages for printing.`;
+            statusDiv.innerText = `Success!\nProcessed ${numPages} labels.\nGenerated ${totalLabelsGenerated} total pages.`;
             loadingTask.destroy();
 
         } catch (err) {
