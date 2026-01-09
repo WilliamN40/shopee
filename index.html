@@ -34,100 +34,136 @@
 </div>
 
 <script type="module">
+    // Import modern PDF.js
     import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.149/pdf.min.mjs';
-    
-    // 3. Updated Worker source to match v5
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.149/pdf.worker.min.mjs';
 
     const { PDFDocument, rgb, StandardFonts } = PDFLib;
-
+    const btn = document.getElementById('processBtn');
+    const statusDiv = document.getElementById('status');
     const fileInput = document.getElementById('fileInput');
     const fileLabel = document.getElementById('fileLabel');
-    const statusDiv = document.getElementById('status');
-    const btn = document.getElementById('processBtn');
 
-    fileInput.onchange = () => {
-        if(fileInput.files[0]) fileLabel.innerText = fileInput.files[0].name;
-    };
+    fileInput.onchange = () => { if(fileInput.files[0]) fileLabel.innerText = fileInput.files[0].name; };
 
     btn.onclick = async () => {
-        if (!fileInput.files[0]) return alert("Select a PDF first!");
+        if (!fileInput.files[0]) return alert("Select PDF first");
         
         btn.disabled = true;
         statusDiv.style.display = "block";
-        statusDiv.innerText = "Initializing...";
+        statusDiv.innerText = "Starting analysis...";
 
         try {
-            const file = fileInput.files[0];
-            const arrayBuffer = await file.arrayBuffer();
-            const bufferForPdfLib = arrayBuffer.slice(0); 
-            const bufferForPdfJS = arrayBuffer.slice(0);
-
-            const loadingTask = pdfjsLib.getDocument({data: bufferForPdfJS});
+            const arrayBuffer = await fileInput.files[0].arrayBuffer();
+            // Use slice to avoid detaching buffers
+            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
             const pdfData = await loadingTask.promise;
-            const numPages = pdfData.numPages;
             
-            const sourceDoc = await PDFDocument.load(bufferForPdfLib);
+            const sourceDoc = await PDFDocument.load(arrayBuffer.slice(0));
             const outDoc = await PDFDocument.create();
+            // Embed font for drawing the variation name
+            const font = await outDoc.embedFont(StandardFonts.HelveticaBold);
 
-            let totalLabelsGenerated = 0;
+            let categorizedPages = {}; 
 
-            for (let i = 1; i <= numPages; i++) {
-                statusDiv.innerText = `Processing: Page ${i} of ${numPages}...`;
-
+            // --- PHASE 1: ANALYZE & GROUP ---
+            for (let i = 1; i <= pdfData.numPages; i++) {
+                statusDiv.innerText = `Analyzing: Page ${i} of ${pdfData.numPages}`;
                 const pageData = await pdfData.getPage(i);
                 const textContent = await pageData.getTextContent();
                 
-                // 1. Find the horizontal position of "Qty"
                 const qtyHeader = textContent.items.find(item => item.str.trim() === "Qty");
+                const variasiHeader = textContent.items.find(item => item.str.trim() === "Variasi");
                 const pesanMarker = textContent.items.find(item => item.str.includes("Pesan:"));
                 
-                let totalQty = 0;
-
-                if (qtyHeader && pesanMarker) {
-                    const qtyX = qtyHeader.transform[4];
+                if (qtyHeader && variasiHeader && pesanMarker) {
                     const tableTopY = qtyHeader.transform[5];
                     const tableBottomY = pesanMarker.transform[5];
-      
-                    // 2. Only grab numbers aligned vertically with the "Qty" column
-                    const qtyValues = textContent.items.filter(item => {
-                        const itemX = item.transform[4];
-                        const itemY = item.transform[5];
-                        const isAligned = Math.abs(itemX - qtyX) < 20; 
-                        const isInsideTable = itemY < tableTopY && itemY > tableBottomY;
-                        const isNumber = /^\d+$/.test(item.str.trim());
-                        return isAligned && isInsideTable && isNumber;
+                    const qtyX = qtyHeader.transform[4];
+                    const variasiX = variasiHeader.transform[4];
+
+                    const allQtyItems = textContent.items.filter(item => 
+                        Math.abs(item.transform[4] - qtyX) < 15 && 
+                        item.transform[5] < tableTopY && item.transform[5] > tableBottomY &&
+                        /^\d+$/.test(item.str.trim())
+                    );
+
+                    const allVariasiItems = textContent.items.filter(item => 
+                        Math.abs(item.transform[4] - variasiX) < 30 && 
+                        item.transform[5] < tableTopY && item.transform[5] > tableBottomY &&
+                        item.str.trim() !== ""
+                    );
+
+                    // Match Qty to Variasi based on vertical Y position
+                    allQtyItems.forEach(qItem => {
+                        const qY = qItem.transform[5];
+                        const qVal = parseInt(qItem.str.trim());
+                        // Find variation on the same line (within 10pt tolerance)
+                        const vItem = allVariasiItems.find(v => Math.abs(v.transform[5] - qY) < 10);
+                        // Clean up variation name (remove extra spaces)
+                        const vName = vItem ? vItem.str.replace(/\s+/g, ' ').trim() : "No Variant";
+
+                        if (!categorizedPages[vName]) categorizedPages[vName] = [];
+                        categorizedPages[vName].push({ pageIndex: i - 1, qty: qVal });
                     });
-
-                    qtyValues.forEach(item => {
-                        totalQty += parseInt(item.str.trim());
-                    });
-                }
-
-                if (totalQty === 0) totalQty = 1;
-                totalLabelsGenerated += totalQty;
-
-                // 3. Duplicate pages
-                const [copiedPage] = await outDoc.copyPages(sourceDoc, [i - 1]);
-                for (let k = 0; k < totalQty; k++) {
-                    outDoc.addPage(copiedPage);
                 }
             }
 
-            statusDiv.innerText = "Saving PDF...";
+            // --- PHASE 2: GENERATE & MARK PDF ---
+            statusDiv.innerText = "Generating sorted PDF and adding marks...";
+            const sortedVariations = Object.keys(categorizedPages).sort();
+            
+            for (const variant of sortedVariations) {
+                for (const item of categorizedPages[variant]) {
+                    // Copy the original page
+                    const [copiedPage] = await outDoc.copyPages(sourceDoc, [item.pageIndex]);
+                    const { width } = copiedPage.getSize();
+
+                    // --- DRAW VARIATION ON BOTTOM RIGHT ---
+                    const fontSize = 12;
+                    // Calculate width of text to align it to the right
+                    const textWidth = font.widthOfTextAtSize(variant, fontSize);
+                    const marginX = 25; // Distance from right edge
+                    const marginY = 25; // Distance from bottom edge
+
+                    // Draw white background box for readability
+                    copiedPage.drawRectangle({
+                        x: width - textWidth - marginX - 5,
+                        y: marginY - 5,
+                        width: textWidth + 10,
+                        height: fontSize + 8,
+                        color: rgb(1, 1, 1),
+                    });
+
+                    // Draw the variation text
+                    copiedPage.drawText(variant, {
+                        x: width - textWidth - marginX,
+                        y: marginY,
+                        size: fontSize,
+                        font: font,
+                        color: rgb(0, 0, 0),
+                    });
+                    // --------------------------------------
+
+                    // Add the marked page Qty times
+                    for (let k = 0; k < item.qty; k++) {
+                        outDoc.addPage(copiedPage);
+                    }
+                }
+            }
+
             const pdfBytes = await outDoc.save();
-            const blob = new Blob([pdfBytes], { type: "application/pdf" });
             const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `Multiplied_${file.name}`;
+            link.href = URL.createObjectURL(new Blob([pdfBytes], { type: "application/pdf" }));
+            link.download = `Sorted_Labels_${fileInput.files[0].name}`;
             link.click();
             
-            statusDiv.innerText = `Success!\nProcessed ${numPages} labels.\nGenerated ${totalLabelsGenerated} total pages.`;
-            loadingTask.destroy();
+            statusDiv.innerText = `Success!\nSorted groups:\n${sortedVariations.join("\n")}`;
+            await loadingTask.destroy();
 
         } catch (err) {
-            console.error(err);
             statusDiv.innerText = "Error: " + err.message;
+            console.error(err);
         } finally {
             btn.disabled = false;
         }
