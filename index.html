@@ -200,7 +200,7 @@
             for (const label of allLabels) {
                 const [copiedPage] = await outDoc.copyPages(sourceDoc, [label.pageIndex]);
                 const { width } = copiedPage.getSize();
-                const fontSize = 11;
+                const fontSize = 20;
 
                 // --- A. Draw Variant Name (Bottom Left) ---
                 if (doShowVar) {
