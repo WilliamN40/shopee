@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Shopee Label Master Tool</title>
+    <title>Shopee Smart Sorter</title>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <style>
       body {
@@ -20,7 +20,7 @@
         padding: 25px;
         border-radius: 12px;
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
-        width: 400px;
+        width: 420px;
       }
       h1 {
         color: #ee4d2d;
@@ -33,30 +33,11 @@
         text-align: center;
         margin-bottom: 20px;
       }
-
-      /* Form Elements */
       .control-group {
         margin-bottom: 15px;
         border-bottom: 1px solid #eee;
         padding-bottom: 15px;
       }
-      label {
-        font-weight: 600;
-        font-size: 0.9rem;
-        display: block;
-        margin-bottom: 5px;
-        color: #333;
-      }
-
-      select {
-        width: 100%;
-        padding: 8px;
-        border: 1px solid #ccc;
-        border-radius: 6px;
-        margin-bottom: 10px;
-        font-size: 0.95rem;
-      }
-
       .checkbox-row {
         display: flex;
         align-items: center;
@@ -68,12 +49,12 @@
         font-weight: normal;
         font-size: 0.9rem;
         cursor: pointer;
+        color: #333;
       }
       .checkbox-row input {
         transform: scale(1.2);
         cursor: pointer;
       }
-
       input[type="file"] {
         display: none;
       }
@@ -92,7 +73,6 @@
       .file-upload-btn:hover {
         background: #fff5f2;
       }
-
       button#processBtn {
         background-color: #ee4d2d;
         color: white;
@@ -109,7 +89,6 @@
         background-color: #ccc;
         cursor: not-allowed;
       }
-
       #status {
         margin-top: 15px;
         font-size: 0.85rem;
@@ -126,16 +105,10 @@
   </head>
   <body>
     <div class="card">
-      <h1>Shopee Master Tool</h1>
-      <p class="subtitle">Sorter, Multiplier & Renceng Detector</p>
+      <h1>Shopee Smart Sorter</h1>
+      <p class="subtitle">Auto-Separates Satuan vs Mixed Orders</p>
 
       <div class="control-group">
-        <label>Sorting Mode:</label>
-        <select id="sortMode">
-          <option value="variant">Group by Variant (M32, L28, XL...)</option>
-          <option value="page">Group by Order Number</option>
-        </select>
-
         <div class="checkbox-row">
           <label for="showVariant">Show Variant Name (Bottom-Left)</label>
           <input type="checkbox" id="showVariant" checked />
@@ -151,7 +124,7 @@
       </label>
       <input type="file" id="fileInput" accept=".pdf" />
 
-      <button id="processBtn">PROCESS LABELS</button>
+      <button id="processBtn">AUTO-SORT LABELS</button>
       <div id="status"></div>
     </div>
 
@@ -167,9 +140,40 @@
       const processBtn = document.getElementById("processBtn");
       const statusDiv = document.getElementById("status");
 
-      const sortModeSelect = document.getElementById("sortMode");
       const showVariantCheck = document.getElementById("showVariant");
       const showCounterCheck = document.getElementById("showCounter");
+
+      // --- CONFIGURATION ---
+      // 1. Sorting Order for SATUAN items
+      const customSortOrder = [
+        "NB-S",
+        "M",
+        "L",
+        "XL",
+        "NB-S40",
+        "M32",
+        "L28",
+        "XL26",
+        "M48",
+        "L42",
+        "XL38",
+      ];
+
+      // 2. Which variants get the "RENCENG" stamp
+      const rencengVariants = [
+        "NB-S",
+        "M",
+        "L",
+        "XL",
+      ];
+
+      function getSortRank(variantName) {
+        // Clean the string to ensure matching works
+        const cleanName = variantName.trim();
+        const index = customSortOrder.indexOf(cleanName);
+        // If not found in list, put it at the end (Rank 999)
+        return index === -1 ? 999 : index;
+      }
 
       fileInput.onchange = () => {
         if (fileInput.files[0])
@@ -195,9 +199,11 @@
           const outDoc = await PDFDocument.create();
           const font = await outDoc.embedFont(StandardFonts.HelveticaBold);
 
-          // --- STEP 1: EXTRACT ITEMS ---
-          let allLabels = [];
+          // Buckets for logic
+          let satuanLabels = [];
+          let mixedLabels = [];
 
+          // --- STEP 1: SCAN & CLASSIFY ---
           for (let i = 1; i <= pdfData.numPages; i++) {
             statusDiv.innerText = `Scanning Page ${i} of ${pdfData.numPages}...`;
 
@@ -215,6 +221,7 @@
             );
 
             let pageItems = [];
+            let uniqueVariantsOnPage = new Set();
 
             if (qtyHeader && pesanMarker) {
               const tableTopY = qtyHeader.transform[5];
@@ -252,6 +259,9 @@
                   if (vItem) vName = vItem.str.replace(/\s+/g, " ").trim();
                 }
 
+                // Add to unique set to check if mixed
+                uniqueVariantsOnPage.add(vName);
+
                 for (let k = 0; k < qVal; k++) {
                   pageItems.push({
                     pageIndex: i - 1,
@@ -261,38 +271,55 @@
               });
             }
 
+            // Fallback for non-table pages
             if (pageItems.length === 0) {
               pageItems.push({ pageIndex: i - 1, variant: "Unknown" });
+              uniqueVariantsOnPage.add("Unknown");
             }
 
+            // --- CLASSIFICATION LOGIC ---
             const totalOrderQty = pageItems.length;
+            const isMixedOrder = uniqueVariantsOnPage.size > 1;
+
             pageItems.forEach((item) => {
               item.counterStr = totalOrderQty > 1 ? `${totalOrderQty}` : "";
               item.originalOrder = i;
-              allLabels.push(item);
+
+              if (isMixedOrder) {
+                mixedLabels.push(item);
+              } else {
+                satuanLabels.push(item);
+              }
             });
           }
 
-          // --- STEP 2: SORT ---
-          statusDiv.innerText = "Sorting labels...";
-          const mode = sortModeSelect.value;
-          if (mode === "variant") {
-            allLabels.sort((a, b) => {
-              if (a.variant < b.variant) return -1;
-              if (a.variant > b.variant) return 1;
-              return a.originalOrder - b.originalOrder;
-            });
-          }
+          // --- STEP 2: SORTING ---
+          statusDiv.innerText = "Sorting Satuan & Mixed groups...";
+
+          // A. SATUAN: Sort by Custom Rank
+          satuanLabels.sort((a, b) => {
+            const rankA = getSortRank(a.variant);
+            const rankB = getSortRank(b.variant);
+
+            if (rankA !== rankB) {
+              return rankA - rankB; // Lower rank first
+            }
+            // If same variant, keep original order
+            return a.originalOrder - b.originalOrder;
+          });
+
+          // B. MIXED: Sort by Original Order (Keep pages together)
+          mixedLabels.sort((a, b) => a.originalOrder - b.originalOrder);
+
+          // Combine: Satuan First, Then Mixed
+          const finalQueue = [...satuanLabels, ...mixedLabels];
 
           // --- STEP 3: GENERATE PDF ---
-          statusDiv.innerText = "Generating PDF...";
+          statusDiv.innerText = "Generating Final PDF...";
           const doShowVar = showVariantCheck.checked;
           const doShowCount = showCounterCheck.checked;
 
-          // Define RENCENG Targets
-          const rencengVariants = ["NB-S", "M", "L", "XL"];
-
-          for (const label of allLabels) {
+          for (const label of finalQueue) {
             const [copiedPage] = await outDoc.copyPages(sourceDoc, [
               label.pageIndex,
             ]);
@@ -321,7 +348,7 @@
               });
             }
 
-            // --- B. Draw Total Qty (Bottom Right) ---
+            // B. Counter (Only if > 1 item in order)
             if (doShowCount && label.counterStr !== "") {
               const text = label.counterStr;
               const textWidth = font.widthOfTextAtSize(text, counterFontSize);
@@ -344,12 +371,14 @@
               });
             }
 
-            // --- C. RENCENG (Bottom-Center) ---
+            // C. RENCENG
+            // Check if matches list
             if (rencengVariants.includes(label.variant)) {
               const text = "RENCENG";
               const fontSize = 18;
               const textWidth = font.widthOfTextAtSize(text, fontSize);
               const cx = width / 2 - textWidth / 2;
+
               copiedPage.drawRectangle({
                 x: cx - 5,
                 y: 18,
@@ -373,12 +402,10 @@
           const blob = new Blob([pdfBytes], { type: "application/pdf" });
           const link = document.createElement("a");
           link.href = URL.createObjectURL(blob);
-
-          const prefix = mode === "variant" ? "SORTED_" : "ORIGINAL_";
-          link.download = `${prefix}${fileInput.files[0].name}`;
+          link.download = `Smart_Sorted_${fileInput.files[0].name}`;
           link.click();
 
-          statusDiv.innerText = `Success!\nGenerated ${allLabels.length} total labels.`;
+          statusDiv.innerText = `Success!\n\n--- STATISTICS ---\nSatuan (Single Type): ${satuanLabels.length} labels\nMixed (Multiple Types): ${mixedLabels.length} labels\nTotal: ${finalQueue.length} labels`;
           await loadingTask.destroy();
         } catch (err) {
           console.error(err);
