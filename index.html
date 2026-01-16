@@ -120,9 +120,9 @@
       </div>
 
       <label for="fileInput" class="file-upload-btn" id="fileLabel">
-        📂 Click to Upload PDF
+        📂 Click to Upload PDF(s)
       </label>
-      <input type="file" id="fileInput" accept=".pdf" />
+      <input type="file" id="fileInput" accept=".pdf" multiple />
 
       <button id="processBtn">AUTO-SORT LABELS</button>
       <div id="status"></div>
@@ -176,26 +176,21 @@
       }
 
       fileInput.onchange = () => {
-        if (fileInput.files[0])
-          fileLabel.innerText = "📄 " + fileInput.files[0].name;
+        if (fileInput.files.length > 0) {
+          const count = fileInput.files.length;
+          fileLabel.innerText = "📄 " + (count === 1 ? fileInput.files[0].name : count + " files selected");
+        }
       };
 
       processBtn.onclick = async () => {
-        if (!fileInput.files[0])
-          return alert("Please select a PDF file first.");
+        if (fileInput.files.length === 0)
+          return alert("Please select at least one PDF file.");
 
         processBtn.disabled = true;
         statusDiv.style.display = "block";
         statusDiv.innerText = "Starting analysis...";
 
         try {
-          const arrayBuffer = await fileInput.files[0].arrayBuffer();
-
-          const loadingTask = pdfjsLib.getDocument({
-            data: arrayBuffer.slice(0),
-          });
-          const pdfData = await loadingTask.promise;
-          const sourceDoc = await PDFDocument.load(arrayBuffer.slice(0));
           const outDoc = await PDFDocument.create();
           const font = await outDoc.embedFont(StandardFonts.HelveticaBold);
 
@@ -203,94 +198,108 @@
           let satuanLabels = [];
           let mixedLabels = [];
 
-          // --- STEP 1: SCAN & CLASSIFY ---
-          for (let i = 1; i <= pdfData.numPages; i++) {
-            statusDiv.innerText = `Scanning Page ${i} of ${pdfData.numPages}...`;
+          // --- STEP 1: SCAN & CLASSIFY ALL FILES ---
+          for (let fileIdx = 0; fileIdx < fileInput.files.length; fileIdx++) {
+            const file = fileInput.files[fileIdx];
+            const arrayBuffer = await file.arrayBuffer();
 
-            const pageData = await pdfData.getPage(i);
-            const textContent = await pageData.getTextContent();
+            const loadingTask = pdfjsLib.getDocument({
+              data: arrayBuffer.slice(0),
+            });
+            const pdfData = await loadingTask.promise;
+            const sourceDoc = await PDFDocument.load(arrayBuffer.slice(0));
 
-            const qtyHeader = textContent.items.find(
-              (item) => item.str.trim() === "Qty"
-            );
-            const variasiHeader = textContent.items.find(
-              (item) => item.str.trim() === "Variasi"
-            );
-            const pesanMarker = textContent.items.find((item) =>
-              item.str.includes("Pesan:")
-            );
+            for (let i = 1; i <= pdfData.numPages; i++) {
+              statusDiv.innerText = `Scanning File ${fileIdx + 1}/${fileInput.files.length}, Page ${i} of ${pdfData.numPages}...`;
 
-            let pageItems = [];
-            let uniqueVariantsOnPage = new Set();
+              const pageData = await pdfData.getPage(i);
+              const textContent = await pageData.getTextContent();
 
-            if (qtyHeader && pesanMarker) {
-              const tableTopY = qtyHeader.transform[5];
-              const tableBottomY = pesanMarker.transform[5];
-              const qtyX = qtyHeader.transform[4];
-              const variasiX = variasiHeader ? variasiHeader.transform[4] : 0;
-
-              const validQtyItems = textContent.items.filter(
-                (item) =>
-                  Math.abs(item.transform[4] - qtyX) < 15 &&
-                  item.transform[5] < tableTopY &&
-                  item.transform[5] > tableBottomY &&
-                  /^\d+$/.test(item.str.trim())
+              const qtyHeader = textContent.items.find(
+                (item) => item.str.trim() === "Qty"
+              );
+              const variasiHeader = textContent.items.find(
+                (item) => item.str.trim() === "Variasi"
+              );
+              const pesanMarker = textContent.items.find((item) =>
+                item.str.includes("Pesan:")
               );
 
-              const validVarItems = variasiHeader
-                ? textContent.items.filter(
-                    (item) =>
-                      Math.abs(item.transform[4] - variasiX) < 30 &&
-                      item.transform[5] < tableTopY &&
-                      item.transform[5] > tableBottomY &&
-                      item.str.trim() !== ""
-                  )
-                : [];
+              let pageItems = [];
+              let uniqueVariantsOnPage = new Set();
 
-              validQtyItems.forEach((qItem) => {
-                const qVal = parseInt(qItem.str.trim());
-                const qY = qItem.transform[5];
+              if (qtyHeader && pesanMarker) {
+                const tableTopY = qtyHeader.transform[5];
+                const tableBottomY = pesanMarker.transform[5];
+                const qtyX = qtyHeader.transform[4];
+                const variasiX = variasiHeader ? variasiHeader.transform[4] : 0;
 
-                let vName = "Standard";
-                if (variasiHeader) {
-                  const vItem = validVarItems.find(
-                    (v) => Math.abs(v.transform[5] - qY) < 10
-                  );
-                  if (vItem) vName = vItem.str.replace(/\s+/g, " ").trim();
-                }
+                const validQtyItems = textContent.items.filter(
+                  (item) =>
+                    Math.abs(item.transform[4] - qtyX) < 15 &&
+                    item.transform[5] < tableTopY &&
+                    item.transform[5] > tableBottomY &&
+                    /^\d+$/.test(item.str.trim())
+                );
 
-                // Add to unique set to check if mixed
-                uniqueVariantsOnPage.add(vName);
+                const validVarItems = variasiHeader
+                  ? textContent.items.filter(
+                      (item) =>
+                        Math.abs(item.transform[4] - variasiX) < 30 &&
+                        item.transform[5] < tableTopY &&
+                        item.transform[5] > tableBottomY &&
+                        item.str.trim() !== ""
+                    )
+                  : [];
 
-                for (let k = 0; k < qVal; k++) {
-                  pageItems.push({
-                    pageIndex: i - 1,
-                    variant: vName,
-                  });
+                validQtyItems.forEach((qItem) => {
+                  const qVal = parseInt(qItem.str.trim());
+                  const qY = qItem.transform[5];
+
+                  let vName = "Standard";
+                  if (variasiHeader) {
+                    const vItem = validVarItems.find(
+                      (v) => Math.abs(v.transform[5] - qY) < 10
+                    );
+                    if (vItem) vName = vItem.str.replace(/\s+/g, " ").trim();
+                  }
+
+                  // Add to unique set to check if mixed
+                  uniqueVariantsOnPage.add(vName);
+
+                  for (let k = 0; k < qVal; k++) {
+                    pageItems.push({
+                      sourceDoc: sourceDoc,
+                      pageIndex: i - 1,
+                      variant: vName,
+                    });
+                  }
+                });
+              }
+
+              // Fallback for non-table pages
+              if (pageItems.length === 0) {
+                pageItems.push({ sourceDoc: sourceDoc, pageIndex: i - 1, variant: "Unknown" });
+                uniqueVariantsOnPage.add("Unknown");
+              }
+
+              // --- CLASSIFICATION LOGIC ---
+              const totalOrderQty = pageItems.length;
+              const isMixedOrder = uniqueVariantsOnPage.size > 1;
+
+              pageItems.forEach((item) => {
+                item.counterStr = totalOrderQty > 1 ? `${totalOrderQty}` : "";
+                item.originalOrder = i;
+
+                if (isMixedOrder) {
+                  mixedLabels.push(item);
+                } else {
+                  satuanLabels.push(item);
                 }
               });
             }
 
-            // Fallback for non-table pages
-            if (pageItems.length === 0) {
-              pageItems.push({ pageIndex: i - 1, variant: "Unknown" });
-              uniqueVariantsOnPage.add("Unknown");
-            }
-
-            // --- CLASSIFICATION LOGIC ---
-            const totalOrderQty = pageItems.length;
-            const isMixedOrder = uniqueVariantsOnPage.size > 1;
-
-            pageItems.forEach((item) => {
-              item.counterStr = totalOrderQty > 1 ? `${totalOrderQty}` : "";
-              item.originalOrder = i;
-
-              if (isMixedOrder) {
-                mixedLabels.push(item);
-              } else {
-                satuanLabels.push(item);
-              }
-            });
+            await loadingTask.destroy();
           }
 
           // --- STEP 2: SORTING ---
@@ -320,7 +329,7 @@
           const doShowCount = showCounterCheck.checked;
 
           for (const label of finalQueue) {
-            const [copiedPage] = await outDoc.copyPages(sourceDoc, [
+            const [copiedPage] = await outDoc.copyPages(label.sourceDoc, [
               label.pageIndex,
             ]);
             const { width, height } = copiedPage.getSize();
@@ -402,11 +411,10 @@
           const blob = new Blob([pdfBytes], { type: "application/pdf" });
           const link = document.createElement("a");
           link.href = URL.createObjectURL(blob);
-          link.download = `Smart_Sorted_${fileInput.files[0].name}`;
+          link.download = `Smart_Sorted_${fileInput.files.length > 1 ? "Multiple" : fileInput.files[0].name}`;
           link.click();
 
           statusDiv.innerText = `Success!\n\n--- STATISTICS ---\nSatuan (Single Type): ${satuanLabels.length} labels\nMixed (Multiple Types): ${mixedLabels.length} labels\nTotal: ${finalQueue.length} labels`;
-          await loadingTask.destroy();
         } catch (err) {
           console.error(err);
           statusDiv.innerText = "Error: " + err.message;
